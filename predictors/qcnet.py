@@ -38,7 +38,7 @@ try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
 except ImportError:
     ChallengeSubmission = object
-
+from pdb import set_trace
 
 class QCNet(pl.LightningModule):
 
@@ -163,43 +163,44 @@ class QCNet(pl.LightningModule):
                       batch_idx):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
-        reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
-        cls_mask = data['agent']['predict_mask'][:, -1]
+        set_trace()
+        reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:] # [numAgent, numFuture]
+        cls_mask = data['agent']['predict_mask'][:, -1]                         # [numAgent]
         pred = self(data)
-        if self.output_head:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['loc_propose_head'],
+        if self.output_head:                                                                # [numAgent, num_modes, num_future_steps, 4]
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],           # [numAgent, num_modes, num_future_steps, 1]
+                                      pred['loc_propose_head'],                                 # [numAgent, num_modes, num_future_steps, 1]
                                       pred['scale_propose_pos'][..., :self.output_dim],
                                       pred['conc_propose_head']], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],         # [numAgent, num_modes, num_future_steps, 4]
                                      pred['loc_refine_head'],
                                      pred['scale_refine_pos'][..., :self.output_dim],
                                      pred['conc_refine_head']], dim=-1)
         else:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],   
                                       pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
             traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
                                      pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-        pi = pred['pi']
-        gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
+        pi = pred['pi']                                                                                                 # [numAgent, num_modes]
+        gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)     # [numAgent, numFuture, 3]
+        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -                                                     # [numAgent, num_modes]
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+        best_mode = l2_norm.argmin(dim=-1)                                                                              # [numAgent]
+        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]                                 # [numAgent, numFuture, 4]
+        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]                                    # [numAgent, numFuture, 4]
         reg_loss_propose = self.reg_loss(traj_propose_best,
-                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_propose = reg_loss_propose.mean()
+                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask           # [numAgent, numFuture]
+        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)                              # [numFuture]
+        reg_loss_propose = reg_loss_propose.mean()                                                                        # scalar                  
         reg_loss_refine = self.reg_loss(traj_refine_best,
-                                        gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
+                                        gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask            # [numAgent, numFuture]
+        reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)                                 # [numFuture]
         reg_loss_refine = reg_loss_refine.mean()
-        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
-                                 target=gt[:, -1:, :self.output_dim + self.output_head],
+        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),                                                  #[numAgent]     
+                                 target=gt[:, -1:, :self.output_dim + self.output_head],                                    # [numAgent, num_modes, 1, 4]
                                  prob=pi,
                                  mask=reg_mask[:, -1:]) * cls_mask
-        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
+        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)                                                        # scalar
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)

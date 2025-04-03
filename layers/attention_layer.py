@@ -19,7 +19,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import softmax
 
 from utils import weight_init
-
+from pdb import set_trace
 
 class AttentionLayer(MessagePassing):
 
@@ -71,16 +71,17 @@ class AttentionLayer(MessagePassing):
                 r: Optional[torch.Tensor],
                 edge_index: torch.Tensor) -> torch.Tensor:
         if isinstance(x, torch.Tensor):
-            x_src = x_dst = self.attn_prenorm_x_src(x)
+            x_src = x_dst = self.attn_prenorm_x_src(x)  # x[numMap, hidden_dims], x_src[numMap, hidden_dim]
         else:
             x_src, x_dst = x
             x_src = self.attn_prenorm_x_src(x_src)
             x_dst = self.attn_prenorm_x_dst(x_dst)
             x = x[1]
+        # set_trace()
         if self.has_pos_emb and r is not None:
             r = self.attn_prenorm_r(r)
-        x = x + self.attn_postnorm(self._attn_block(x_src, x_dst, r, edge_index))
-        x = x + self.ff_postnorm(self._ff_block(self.ff_prenorm(x)))
+        x = x + self.attn_postnorm(self._attn_block(x_src, x_dst, r, edge_index)) # [numMap, hidden_dims]
+        x = x + self.ff_postnorm(self._ff_block(self.ff_prenorm(x)))                # [numMap, hidden_dims]
         return x
 
     def message(self,
@@ -91,30 +92,29 @@ class AttentionLayer(MessagePassing):
                 index: torch.Tensor,
                 ptr: Optional[torch.Tensor]) -> torch.Tensor:
         if self.has_pos_emb and r is not None:
-            k_j = k_j + self.to_k_r(r).view(-1, self.num_heads, self.head_dim)
-            v_j = v_j + self.to_v_r(r).view(-1, self.num_heads, self.head_dim)
-        sim = (q_i * k_j).sum(dim=-1) * self.scale
+            k_j = k_j + self.to_k_r(r).view(-1, self.num_heads, self.head_dim)  # [numMap, numHeads8, headDim16]
+            v_j = v_j + self.to_v_r(r).view(-1, self.num_heads, self.head_dim)  # [numMap, numHeads, headDim] 
+        sim = (q_i * k_j).sum(dim=-1) * self.scale                              # [numMap, numHeads]
         attn = softmax(sim, index, ptr)
         attn = self.attn_drop(attn)
-        return v_j * attn.unsqueeze(-1)
+        return v_j * attn.unsqueeze(-1)                                         # [numMap, numHeads, headDim]
 
     def update(self,
                inputs: torch.Tensor,
                x_dst: torch.Tensor) -> torch.Tensor:
-        inputs = inputs.view(-1, self.num_heads * self.head_dim)
-        g = torch.sigmoid(self.to_g(torch.cat([inputs, x_dst], dim=-1)))
-        return inputs + g * (self.to_s(x_dst) - inputs)
+        inputs = inputs.view(-1, self.num_heads * self.head_dim)                 #[numMap, hidden_dims128]
+        g = torch.sigmoid(self.to_g(torch.cat([inputs, x_dst], dim=-1)))         # [numMap, hidden_dims]
+        return inputs + g * (self.to_s(x_dst) - inputs)                         # [numMap, hidden_dims]
 
     def _attn_block(self,
                     x_src: torch.Tensor,
                     x_dst: torch.Tensor,
                     r: Optional[torch.Tensor],
                     edge_index: torch.Tensor) -> torch.Tensor:
-        q = self.to_q(x_dst).view(-1, self.num_heads, self.head_dim)
+        q = self.to_q(x_dst).view(-1, self.num_heads, self.head_dim)    # [numMap, numHeads, headDim]
         k = self.to_k(x_src).view(-1, self.num_heads, self.head_dim)
-        v = self.to_v(x_src).view(-1, self.num_heads, self.head_dim)
-        agg = self.propagate(edge_index=edge_index, x_dst=x_dst, q=q, k=k, v=v, r=r)
-        return self.to_out(agg)
-
+        v = self.to_v(x_src).view(-1, self.num_heads, self.head_dim)    # [numMap, numHeads, headDim]
+        agg = self.propagate(edge_index=edge_index, x_dst=x_dst, q=q, k=k, v=v, r=r)    # [numMap, hidden_dims]
+        return self.to_out(agg)                                          # [numMap, hidden_dims]
     def _ff_block(self, x: torch.Tensor) -> torch.Tensor:
         return self.ff_mlp(x)

@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 from urllib import request
-
+import pdb
 import numpy as np
 import pandas as pd
 import torch
@@ -186,6 +186,8 @@ class ArgoverseV2Dataset(Dataset):
             df = pd.read_parquet(os.path.join(self.raw_dir, raw_file_name, f'scenario_{raw_file_name}.parquet'))
             map_dir = Path(self.raw_dir) / raw_file_name
             map_path = map_dir / sorted(map_dir.glob('log_map_archive_*.json'))[0]
+            # print(f"Checking map path: {map_path}")  # 调试输出
+            # assert os.path.exists(map_path), f"File {map_path} does not exist!"
             map_data = read_json_file(map_path)
             centerlines = {lane_segment['id']: Polyline.from_json_data(lane_segment['centerline'])
                            for lane_segment in map_data['lane_segments'].values()}
@@ -216,7 +218,7 @@ class ArgoverseV2Dataset(Dataset):
 
         num_agents = len(agent_ids)
         av_idx = agent_ids.index('AV')
-
+        # pdb.set_trace()
         # initialization
         valid_mask = torch.zeros(num_agents, self.num_steps, dtype=torch.bool)
         current_valid_mask = torch.zeros(num_agents, dtype=torch.bool)
@@ -333,7 +335,7 @@ class ArgoverseV2Dataset(Dataset):
                 [torch.full((len(left_vectors),), self._point_sides.index('LEFT'), dtype=torch.uint8),
                  torch.full((len(right_vectors),), self._point_sides.index('RIGHT'), dtype=torch.uint8),
                  torch.full((len(center_vectors),), self._point_sides.index('CENTER'), dtype=torch.uint8)], dim=0)
-
+            # pdb.set_trace()
         for crosswalk in map_api.get_scenario_ped_crossings():
             crosswalk_idx = polygon_ids.index(crosswalk.id)
             edge1 = torch.from_numpy(crosswalk.edge1.xyz).float()

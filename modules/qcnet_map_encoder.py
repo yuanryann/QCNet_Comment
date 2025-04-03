@@ -26,6 +26,7 @@ from utils import merge_edges
 from utils import weight_init
 from utils import wrap_angle
 
+from pdb import set_trace
 
 class QCNetMapEncoder(nn.Module):
 
@@ -93,35 +94,35 @@ class QCNetMapEncoder(nn.Module):
         self.apply(weight_init)
 
     def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:
-        pos_pt = data['map_point']['position'][:, :self.input_dim].contiguous()
-        orient_pt = data['map_point']['orientation'].contiguous()
-        pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
-        orient_pl = data['map_polygon']['orientation'].contiguous()
-        orient_vector_pl = torch.stack([orient_pl.cos(), orient_pl.sin()], dim=-1)
-
+        pos_pt = data['map_point']['position'][:, :self.input_dim].contiguous() # [numMapPoint, 3] -> [numMapPoint, 2]
+        orient_pt = data['map_point']['orientation'].contiguous()               # [numMapPoint, 1]
+        pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous() # [numMapPolygon, 3] -> [numMapPolygon, 2]
+        orient_pl = data['map_polygon']['orientation'].contiguous()             # [numMapPolygon, 1]
+        orient_vector_pl = torch.stack([orient_pl.cos(), orient_pl.sin()], dim=-1) # [numMapPolygon, 2]
+        # set_trace()
         if self.dataset == 'argoverse_v2':
             if self.input_dim == 2:
-                x_pt = data['map_point']['magnitude'].unsqueeze(-1)
+                x_pt = data['map_point']['magnitude'].unsqueeze(-1)                 # [numMapPoint] -> [numMapPoint, 1]
                 x_pl = None
             elif self.input_dim == 3:
                 x_pt = torch.stack([data['map_point']['magnitude'], data['map_point']['height']], dim=-1)
                 x_pl = data['map_polygon']['height'].unsqueeze(-1)
             else:
                 raise ValueError('{} is not a valid dimension'.format(self.input_dim))
-            x_pt_categorical_embs = [self.type_pt_emb(data['map_point']['type'].long()),
+            x_pt_categorical_embs = [self.type_pt_emb(data['map_point']['type'].long()),    # list type [[numMapPoint, hidden_dim],[numMapPoint, hidden_dim]]
                                      self.side_pt_emb(data['map_point']['side'].long())]
-            x_pl_categorical_embs = [self.type_pl_emb(data['map_polygon']['type'].long()),
+            x_pl_categorical_embs = [self.type_pl_emb(data['map_polygon']['type'].long()),  # list type [[numMapPolygon, hidden_dim],[numMapPolygon, hidden_dim]]
                                      self.int_pl_emb(data['map_polygon']['is_intersection'].long())]
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
-        x_pt = self.x_pt_emb(continuous_inputs=x_pt, categorical_embs=x_pt_categorical_embs)
-        x_pl = self.x_pl_emb(continuous_inputs=x_pl, categorical_embs=x_pl_categorical_embs)
+        x_pt = self.x_pt_emb(continuous_inputs=x_pt, categorical_embs=x_pt_categorical_embs)    # [numMapPoint, hidden_dim]
+        x_pl = self.x_pl_emb(continuous_inputs=x_pl, categorical_embs=x_pl_categorical_embs)    # [numMapPolygon, hidden_dim]
 
-        edge_index_pt2pl = data['map_point', 'to', 'map_polygon']['edge_index']
-        rel_pos_pt2pl = pos_pt[edge_index_pt2pl[0]] - pos_pl[edge_index_pt2pl[1]]
-        rel_orient_pt2pl = wrap_angle(orient_pt[edge_index_pt2pl[0]] - orient_pl[edge_index_pt2pl[1]])
+        edge_index_pt2pl = data['map_point', 'to', 'map_polygon']['edge_index']                 # [2, numMapPoint2MapPolygon]
+        rel_pos_pt2pl = pos_pt[edge_index_pt2pl[0]] - pos_pl[edge_index_pt2pl[1]]               # [numMapPoint2MapPolygon, 2]
+        rel_orient_pt2pl = wrap_angle(orient_pt[edge_index_pt2pl[0]] - orient_pl[edge_index_pt2pl[1]]) # [numMapPoint2MapPolygon]
         if self.input_dim == 2:
-            r_pt2pl = torch.stack(
+            r_pt2pl = torch.stack(                                                                # [numMapPoint2MapPolygon, 3]
                 [torch.norm(rel_pos_pt2pl[:, :2], p=2, dim=-1),
                  angle_between_2d_vectors(ctr_vector=orient_vector_pl[edge_index_pt2pl[1]],
                                           nbr_vector=rel_pos_pt2pl[:, :2]),
@@ -135,18 +136,18 @@ class QCNetMapEncoder(nn.Module):
                  rel_orient_pt2pl], dim=-1)
         else:
             raise ValueError('{} is not a valid dimension'.format(self.input_dim))
-        r_pt2pl = self.r_pt2pl_emb(continuous_inputs=r_pt2pl, categorical_embs=None)
+        r_pt2pl = self.r_pt2pl_emb(continuous_inputs=r_pt2pl, categorical_embs=None)          # [numMapPoint2MapPolygon, hidden_dim]
 
-        edge_index_pl2pl = data['map_polygon', 'to', 'map_polygon']['edge_index']
-        edge_index_pl2pl_radius = radius_graph(x=pos_pl[:, :2], r=self.pl2pl_radius,
+        edge_index_pl2pl = data['map_polygon', 'to', 'map_polygon']['edge_index']               # [2, numMapPolygon2MapPolygon]
+        edge_index_pl2pl_radius = radius_graph(x=pos_pl[:, :2], r=self.pl2pl_radius,        # [2, numpl2plGraph]
                                                batch=data['map_polygon']['batch'] if isinstance(data, Batch) else None,
                                                loop=False, max_num_neighbors=300)
-        type_pl2pl = data['map_polygon', 'to', 'map_polygon']['type']
-        type_pl2pl_radius = type_pl2pl.new_zeros(edge_index_pl2pl_radius.size(1), dtype=torch.uint8)
+        type_pl2pl = data['map_polygon', 'to', 'map_polygon']['type']                           # [numMapPolygon2MapPolygon]
+        type_pl2pl_radius = type_pl2pl.new_zeros(edge_index_pl2pl_radius.size(1), dtype=torch.uint8)    # [numpl2plGraph]
         edge_index_pl2pl, type_pl2pl = merge_edges(edge_indices=[edge_index_pl2pl_radius, edge_index_pl2pl],
                                                    edge_attrs=[type_pl2pl_radius, type_pl2pl], reduce='max')
-        rel_pos_pl2pl = pos_pl[edge_index_pl2pl[0]] - pos_pl[edge_index_pl2pl[1]]
-        rel_orient_pl2pl = wrap_angle(orient_pl[edge_index_pl2pl[0]] - orient_pl[edge_index_pl2pl[1]])
+        rel_pos_pl2pl = pos_pl[edge_index_pl2pl[0]] - pos_pl[edge_index_pl2pl[1]]               # [numpl2plGraph, 2]
+        rel_orient_pl2pl = wrap_angle(orient_pl[edge_index_pl2pl[0]] - orient_pl[edge_index_pl2pl[1]]) # [numpl2plGraph]
         if self.input_dim == 2:
             r_pl2pl = torch.stack(
                 [torch.norm(rel_pos_pl2pl[:, :2], p=2, dim=-1),
@@ -154,9 +155,9 @@ class QCNetMapEncoder(nn.Module):
                                           nbr_vector=rel_pos_pl2pl[:, :2]),
                  rel_orient_pl2pl], dim=-1)
         elif self.input_dim == 3:
-            r_pl2pl = torch.stack(
+            r_pl2pl = torch.stack(                                                               # [numpl2plGraph, 4]       
                 [torch.norm(rel_pos_pl2pl[:, :2], p=2, dim=-1),
-                 angle_between_2d_vectors(ctr_vector=orient_vector_pl[edge_index_pl2pl[1]],
+                 angle_between_2d_vectors(ctr_vector=orient_vector_pl[edge_index_pl2pl[1]],         # [numpl2plGraph]
                                           nbr_vector=rel_pos_pl2pl[:, :2]),
                  rel_pos_pl2pl[:, -1],
                  rel_orient_pl2pl], dim=-1)
@@ -165,9 +166,9 @@ class QCNetMapEncoder(nn.Module):
         r_pl2pl = self.r_pl2pl_emb(continuous_inputs=r_pl2pl, categorical_embs=[self.type_pl2pl_emb(type_pl2pl.long())])
 
         for i in range(self.num_layers):
-            x_pl = self.pt2pl_layers[i]((x_pt, x_pl), r_pt2pl, edge_index_pt2pl)
-            x_pl = self.pl2pl_layers[i](x_pl, r_pl2pl, edge_index_pl2pl)
-        x_pl = x_pl.repeat_interleave(repeats=self.num_historical_steps,
+            x_pl = self.pt2pl_layers[i]((x_pt, x_pl), r_pt2pl, edge_index_pt2pl)                # [numMapPoint, hidden_dim]
+            x_pl = self.pl2pl_layers[i](x_pl, r_pl2pl, edge_index_pl2pl)                        # [numMapPolygon, hidden_dim]
+        x_pl = x_pl.repeat_interleave(repeats=self.num_historical_steps,                        # [numMapPolygon, num_historical_steps, hidden_dim]
                                       dim=0).reshape(-1, self.num_historical_steps, self.hidden_dim)
 
-        return {'x_pt': x_pt, 'x_pl': x_pl}
+        return {'x_pt': x_pt, 'x_pl': x_pl} #x_pt: [numMapPoint, hidden_dim], x_pl: [numMapPolygon, num_historical_steps, hidden_dim]

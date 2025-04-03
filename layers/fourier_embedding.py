@@ -13,7 +13,7 @@
 # limitations under the License.
 import math
 from typing import List, Optional
-
+import pdb
 import torch
 import torch.nn as nn
 
@@ -62,6 +62,7 @@ class FourierEmbedding(nn.Module):
             for i in range(self.input_dim):
                 continuous_embs[i] = self.mlps[i](x[:, i])
             x = torch.stack(continuous_embs).sum(dim=0)
+            # pdb.set_trace()
             if categorical_embs is not None:
                 x = x + torch.stack(categorical_embs).sum(dim=0)
         return self.to_out(x)
